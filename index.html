@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Three.js - Load your own FBX</title>
+  <style>
+    html,body{margin:0;overflow:hidden;background:#1a1a1a;font-family:sans-serif}
+    /* simple overlay for the file picker */
+    #picker{
+      position:fixed;top:10px;left:10px;z-index:10;
+      background:#fff;border-radius:6px;padding:6px 10px;
+      box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none
+    }
+  </style>
+
+  <!-- ── import-map for clean “import 'three'” statements ─────────── -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three":         "https://unpkg.com/three@0.152.2/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.152.2/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+<!-- <div id="picker">
+  <input type="file" id="fileInput" accept=".fbx">
+</div> -->
+
+<script type="module">
+import * as THREE               from 'three';
+import { OrbitControls }        from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader }            from 'three/addons/loaders/FBXLoader.js';
+
+/* ─── globals ─────────────────────────────────────────────────── */
+let scene, camera, renderer, controls, mixer, currentModel;
+
+/* ─── renderer ────────────────────────────────────────────────── */
+renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+/* ─── scene & camera ─────────────────────────────────────────── */
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202020);
+
+camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.set(2,1.6,4);
+
+/* ─── orbit controls ─────────────────────────────────────────── */
+controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0,1,0);
+controls.update();
+
+/* ─── lights ─────────────────────────────────────────────────── */
+scene.add(new THREE.HemisphereLight(0xffffff,0x444444,0.6));
+
+const dir = new THREE.DirectionalLight(0xffffff,1);
+dir.position.set(5,10,2);
+dir.castShadow = true;
+dir.shadow.camera.top    = 6;
+dir.shadow.camera.bottom = -6;
+dir.shadow.camera.left   = -6;
+dir.shadow.camera.right  = 6;
+scene.add(dir);
+
+/* ground */
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(40,40),
+  new THREE.MeshStandardMaterial({color:0x303030,roughness:0.8})
+);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ─── helper: load ArrayBuffer with FBXLoader.parse ───────────── */
+const fbxLoader = new FBXLoader();
+
+function loadFbxFromArrayBuffer(buffer, name='local'){
+  /* remove previous model */
+  if(currentModel){
+    scene.remove(currentModel);
+    mixer = undefined;
+  }
+
+  const object = fbxLoader.parse(buffer, name);
+
+  /* animations */
+  if(object.animations.length){
+    mixer = new THREE.AnimationMixer(object);
+    mixer.clipAction(object.animations[0]).play();
+  }
+
+  /* PBR material + shadows */
+  object.traverse((child)=>{
+    if(child.isMesh){
+      child.castShadow = child.receiveShadow = true;
+      if(!(child.material instanceof THREE.MeshStandardMaterial)){
+        const m = new THREE.MeshStandardMaterial({
+          color: child.material.color,
+          map:   child.material.map,
+          skinning: child.isSkinnedMesh
+        });
+        child.material = m;
+      }else if(child.isSkinnedMesh){
+        child.material.skinning = true;
+      }
+    }
+  });
+
+  /* scale down huge FBX files (heuristic) */
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3()).length();
+  if(size > 5) object.scale.setScalar(5/size);
+
+  scene.add(object);
+  currentModel = object;
+}
+
+// /* ─── file picker handler ─────────────────────────────────────── */
+// document.getElementById('fileInput').addEventListener('change', (e)=>{
+//   // const file = e.target.files[0];
+//   // Hardcode this path instead
+//   const file = "/Users/an.khomyakov/Downloads/Pokemon.fbx";
+//   if(!file) return;
+//   const reader = new FileReader();
+//   reader.onload = () => loadFbxFromArrayBuffer(reader.result, file);
+//   reader.readAsArrayBuffer(file);
+// });
+// Hardcoded FBX path (served from the same directory or a URL)
+// const fbxPath = '/Users/an.khomyakov/Downloads/Pokemon.fbx'; // or use a URL like 'models/Pokemon.fbx'
+const fbxPath = './Pokemon.fbx';
+
+fbxLoader.load(fbxPath, (object) => {
+  // animations
+  if (object.animations.length) {
+    mixer = new THREE.AnimationMixer(object);
+    mixer.clipAction(object.animations[0]).play();
+  }
+
+  // PBR material + shadows
+  object.traverse((child)=>{
+    if(child.isMesh){
+      child.castShadow = child.receiveShadow = true;
+      if(!(child.material instanceof THREE.MeshStandardMaterial)){
+        const m = new THREE.MeshStandardMaterial({
+          color: child.material.color,
+          map:   child.material.map,
+          skinning: child.isSkinnedMesh
+        });
+        child.material = m;
+      } else if(child.isSkinnedMesh){
+        child.material.skinning = true;
+      }
+    }
+  });
+
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3()).length();
+  if(size > 5) object.scale.setScalar(5/size);
+
+  scene.add(object);
+  currentModel = object;
+}, undefined, (error) => {
+  console.error('Error loading FBX model:', error);
+});
+
+/* ─── resize & animate ───────────────────────────────────────── */
+window.addEventListener('resize',()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+});
+
+function animate(){
+  requestAnimationFrame(animate);
+  if(mixer) mixer.update(0.016);
+  renderer.render(scene,camera);
+}
+animate();
+</script>
+
+</body>
+</html>
