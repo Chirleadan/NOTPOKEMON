@@ -11,7 +11,7 @@
     /* overlay title */
     #overlay{
       position:fixed;
-      bottom:20px;
+      bottom:80px;                /* title offset */
       left:50%;
       transform:translateX(-50%);
       font-size:clamp(22px,3.7vw,42px);
@@ -20,6 +20,9 @@
       text-shadow:0 3px 6px rgba(0,0,0,.6);
       pointer-events:none;
       user-select:none;
+      white-space:nowrap;
+      max-width:calc(100% - 40px);
+      overflow:hidden;
     }
   </style>
 </head>
