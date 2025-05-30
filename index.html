@@ -2,187 +2,167 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Three.js - Load your own FBX</title>
+  <title>Levitating FBX – Night Scene</title>
   <style>
-    html,body{margin:0;overflow:hidden;background:#1a1a1a;font-family:sans-serif}
-    /* simple overlay for the file picker */
-    #picker{
-      position:fixed;top:10px;left:10px;z-index:10;
-      background:#fff;border-radius:6px;padding:6px 10px;
-      box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none
-    }
-  </style>
+    /* layout */
+    html,body{margin:0;height:100%;overflow:hidden;background:#0b0d14;font-family:sans-serif;color:#fff}
+    canvas{display:block}
 
-  <!-- ── import-map for clean “import 'three'” statements ─────────── -->
+    /* overlay title */
+    #overlay{position:fixed;top:20px;left:50%;transform:translateX(-50%);font-size:clamp(24px,4vw,48px);letter-spacing:2px;font-weight:600;text-shadow:0 2px 4px rgba(0,0,0,.6);pointer-events:none;user-select:none}
+  </style>
+</head>
+<body>
+  <div id="overlay">Be quiet</div>
+
+  <!-- ── three.js import‑map ───────────────────────────→ -->
   <script type="importmap">
   {
     "imports": {
-      "three":         "https://unpkg.com/three@0.152.2/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.152.2/examples/jsm/"
+      "three":         "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
     }
   }
   </script>
-</head>
-<body>
 
-<!-- <div id="picker">
-  <input type="file" id="fileInput" accept=".fbx">
-</div> -->
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { FBXLoader }   from 'three/addons/loaders/FBXLoader.js';
 
-<script type="module">
-import * as THREE               from 'three';
-import { OrbitControls }        from 'three/addons/controls/OrbitControls.js';
-import { FBXLoader }            from 'three/addons/loaders/FBXLoader.js';
+    /* renderer */
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    document.body.appendChild(renderer.domElement);
 
-/* ─── globals ─────────────────────────────────────────────────── */
-let scene, camera, renderer, controls, mixer, currentModel;
+    /* scene & camera */
+    const scene  = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+    camera.position.set(0,1.6,3);
 
-/* ─── renderer ────────────────────────────────────────────────── */
-renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-document.body.appendChild(renderer.domElement);
+    /* controls */
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.12;
+    controls.rotateSpeed   = 0.45;
+    controls.enablePan     = false;
+    controls.enableZoom    = false;
 
-/* ─── scene & camera ─────────────────────────────────────────── */
-scene = new THREE.Scene();
-scene.background = new THREE.Color(0x202020);
+    /* lighting: night ambience + brighter blue moon */
+    scene.add(new THREE.AmbientLight(0x222233, 0.65));
+    const moon = new THREE.DirectionalLight(0x7cb8ff, 1.6);
+    moon.position.set(2,10,5);
+    scene.add(moon);
 
-camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
-camera.position.set(2,1.6,4);
+    /* materials */
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color:0x000000,
+      metalness:0.08,   // subtle sheen — slightly shinier than before
+      roughness:0.6     // a little less matte
+    });
 
-/* ─── orbit controls ─────────────────────────────────────────── */
-controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0,1,0);
-controls.update();
+    const eyeMat  = new THREE.MeshStandardMaterial({
+      color:0xffffff,
+      emissive:0xffffff,
+      emissiveIntensity:5,
+      roughness:0.2,
+      metalness:0.0
+    });
 
-/* ─── lights ─────────────────────────────────────────────────── */
-scene.add(new THREE.HemisphereLight(0xffffff,0x444444,0.6));
+    /* helpers */
+    const loader = new FBXLoader();
+    let   model  = null;
 
-const dir = new THREE.DirectionalLight(0xffffff,1);
-dir.position.set(5,10,2);
-dir.castShadow = true;
-dir.shadow.camera.top    = 6;
-dir.shadow.camera.bottom = -6;
-dir.shadow.camera.left   = -6;
-dir.shadow.camera.right  = 6;
-scene.add(dir);
+    let baseTheta = 0, basePhi = 0;
+    const maxAzDelta  = 0.4;  // ≈±23°
+    const maxPolDelta = 0.25; // ≈±14°
+    let levAmp = 0.2;
 
-/* ground */
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(40,40),
-  new THREE.MeshStandardMaterial({color:0x303030,roughness:0.8})
-);
-ground.rotation.x = -Math.PI/2;
-ground.receiveShadow = true;
-scene.add(ground);
+    const centerAndScale = (obj)=>{
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x,size.y,size.z);
+      obj.scale.setScalar(1/maxDim);
+      box.setFromObject(obj);
+      const center = box.getCenter(new THREE.Vector3());
+      obj.position.sub(center);
+      const sphere = new THREE.Sphere();
+      box.getBoundingSphere(sphere);
+      return sphere.radius;
+    };
 
-/* ─── helper: load ArrayBuffer with FBXLoader.parse ───────────── */
-const fbxLoader = new FBXLoader();
+    const addModel = (obj)=>{
+      obj.traverse(n=>{
+        if(!n.isMesh) return;
+        n.castShadow = n.receiveShadow = true;
+        n.material = /eye/i.test(n.name) ? eyeMat : bodyMat;
+      });
 
-function loadFbxFromArrayBuffer(buffer, name='local'){
-  /* remove previous model */
-  if(currentModel){
-    scene.remove(currentModel);
-    mixer = undefined;
-  }
+      const radius = centerAndScale(obj);
+      model = obj;
+      scene.add(model);
 
-  const object = fbxLoader.parse(buffer, name);
+      const dist = radius * 3;
+      camera.position.set(0, radius*0.5, dist);
+      controls.target.set(0, radius*0.4, 0);
+      controls.update();
 
-  /* animations */
-  if(object.animations.length){
-    mixer = new THREE.AnimationMixer(object);
-    mixer.clipAction(object.animations[0]).play();
-  }
+      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+      baseTheta = sph.theta;
+      basePhi   = sph.phi;
 
-  /* PBR material + shadows */
-  object.traverse((child)=>{
-    if(child.isMesh){
-      child.castShadow = child.receiveShadow = true;
-      if(!(child.material instanceof THREE.MeshStandardMaterial)){
-        const m = new THREE.MeshStandardMaterial({
-          color: child.material.color,
-          map:   child.material.map,
-          skinning: child.isSkinnedMesh
-        });
-        child.material = m;
-      }else if(child.isSkinnedMesh){
-        child.material.skinning = true;
+      levAmp = radius * 0.2;
+    };
+
+    /* load default model automatically */
+    const modelURL = new URL('./model.fbx', import.meta.url).href;
+    loader.load(modelURL, addModel, undefined, err=>console.error('Failed to load model:', err));
+
+    /* resize */
+    addEventListener('resize', ()=>{
+      renderer.setSize(innerWidth, innerHeight);
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    /* soft‑limit helpers */
+    let dragging = false;
+    renderer.domElement.addEventListener('pointerdown', ()=>dragging=true);
+    renderer.domElement.addEventListener('pointerup',   ()=>dragging=false);
+
+    const softenAngle = (value, base, maxDelta)=>{
+      const delta = value - base;
+      const absD  = Math.abs(delta);
+      if(absD <= maxDelta) return value;
+      const excess = absD - maxDelta;
+      const eased = maxDelta + Math.tanh(excess*4)*0.1;
+      return base + Math.sign(delta)*eased;
+    };
+
+    /* animation loop */
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(()=>{
+      const t = clock.getElapsedTime();
+      if(model) model.position.y = Math.sin(t*0.8)*levAmp;
+
+      controls.update();
+
+      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+      sph.theta = softenAngle(sph.theta, baseTheta, maxAzDelta);
+      sph.phi   = softenAngle(sph.phi,   basePhi,   maxPolDelta);
+
+      if(!dragging){
+        sph.theta = THREE.MathUtils.lerp(sph.theta, baseTheta, 0.02);
+        sph.phi   = THREE.MathUtils.lerp(sph.phi,   basePhi,   0.02);
       }
-    }
-  });
 
-  /* scale down huge FBX files (heuristic) */
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3()).length();
-  if(size > 5) object.scale.setScalar(5/size);
+      const offset = new THREE.Vector3().setFromSpherical(sph);
+      camera.position.copy(controls.target).add(offset);
+      camera.lookAt(controls.target);
 
-  scene.add(object);
-  currentModel = object;
-}
-
-// /* ─── file picker handler ─────────────────────────────────────── */
-// document.getElementById('fileInput').addEventListener('change', (e)=>{
-//   // const file = e.target.files[0];
-//   // Hardcode this path instead
-//   const file = "/Users/an.khomyakov/Downloads/Pokemon.fbx";
-//   if(!file) return;
-//   const reader = new FileReader();
-//   reader.onload = () => loadFbxFromArrayBuffer(reader.result, file);
-//   reader.readAsArrayBuffer(file);
-// });
-// Hardcoded FBX path (served from the same directory or a URL)
-// const fbxPath = '/Users/an.khomyakov/Downloads/Pokemon.fbx'; // or use a URL like 'models/Pokemon.fbx'
-const fbxPath = './Pokemon.fbx';
-
-fbxLoader.load(fbxPath, (object) => {
-  // animations
-  if (object.animations.length) {
-    mixer = new THREE.AnimationMixer(object);
-    mixer.clipAction(object.animations[0]).play();
-  }
-
-  // PBR material + shadows
-  object.traverse((child)=>{
-    if(child.isMesh){
-      child.castShadow = child.receiveShadow = true;
-      if(!(child.material instanceof THREE.MeshStandardMaterial)){
-        const m = new THREE.MeshStandardMaterial({
-          color: child.material.color,
-          map:   child.material.map,
-          skinning: child.isSkinnedMesh
-        });
-        child.material = m;
-      } else if(child.isSkinnedMesh){
-        child.material.skinning = true;
-      }
-    }
-  });
-
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3()).length();
-  if(size > 5) object.scale.setScalar(5/size);
-
-  scene.add(object);
-  currentModel = object;
-}, undefined, (error) => {
-  console.error('Error loading FBX model:', error);
-});
-
-/* ─── resize & animate ───────────────────────────────────────── */
-window.addEventListener('resize',()=>{
-  camera.aspect = window.innerWidth/window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth,window.innerHeight);
-});
-
-function animate(){
-  requestAnimationFrame(animate);
-  if(mixer) mixer.update(0.016);
-  renderer.render(scene,camera);
-}
-animate();
-</script>
-
+      renderer.render(scene, camera);
+    });
+  </script>
 </body>
 </html>
