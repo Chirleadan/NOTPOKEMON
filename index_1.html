@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Levitating FBX – Night Scene</title>
+  <style>
+    /* layout */
+    html,body{margin:0;height:100%;overflow:hidden;background:#0b0d14;font-family:sans-serif;color:#fff}
+    canvas{display:block}
+
+    /* overlay title */
+    #overlay{
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      font-size:clamp(22px,3.7vw,42px);
+      letter-spacing:2px;
+      font-weight:600;
+      text-shadow:0 3px 6px rgba(0,0,0,.6);
+      pointer-events:none;
+      user-select:none;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">COME BACK SOON</div>
+
+  <!-- ── three.js import‑map ───────────────────────────→ -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three":         "https://unpkg.com/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { FBXLoader }   from 'three/addons/loaders/FBXLoader.js';
+
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+    document.body.appendChild(renderer.domElement);
+
+    const scene  = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+    camera.position.set(0,1.6,3);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.12;
+    controls.rotateSpeed   = 0.45;
+    controls.enablePan     = false;
+    controls.enableZoom    = false;
+
+    scene.add(new THREE.AmbientLight(0x2b2b40, 0.8));
+    const moon = new THREE.DirectionalLight(0x9ecbff, 1.9);
+    moon.position.set(2,10,5);
+    scene.add(moon);
+
+    const bodyMat = new THREE.MeshStandardMaterial({ color:0x000000, metalness:0.08, roughness:0.6 });
+    const eyeMat  = new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0xffffff, emissiveIntensity:5, roughness:0.2 });
+
+    const loader = new FBXLoader();
+    let   model  = null;
+    let baseTheta = 0, basePhi = 0;
+    const maxAzDelta  = 0.4;
+    const maxPolDelta = 0.25;
+    let levAmp = 0.2;
+
+    const centerAndScale = (obj)=>{
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x,size.y,size.z);
+      obj.scale.setScalar(1/maxDim);
+      box.setFromObject(obj);
+      const center = box.getCenter(new THREE.Vector3());
+      obj.position.sub(center);
+      const sphere = new THREE.Sphere();
+      box.getBoundingSphere(sphere);
+      return sphere.radius;
+    };
+
+    const addModel = (obj)=>{
+      obj.traverse(n=>{
+        if(!n.isMesh) return;
+        n.castShadow = n.receiveShadow = true;
+        n.material = /eye/i.test(n.name) ? eyeMat : bodyMat;
+      });
+
+      const radius = centerAndScale(obj);
+      model = obj;
+      scene.add(model);
+
+      const dist = radius * 3;
+      camera.position.set(0, radius*0.5, dist);
+      controls.target.set(0, radius*0.4, 0);
+      controls.update();
+
+      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+      baseTheta = sph.theta;
+      basePhi   = sph.phi;
+
+      levAmp = radius * 0.2;
+    };
+
+    const modelURL = new URL('./model.fbx', import.meta.url).href;
+    loader.load(modelURL, addModel, undefined, err=>console.error('Failed to load FBX:', err));
+
+    const loadFBX = (file)=>{
+      if(model){ scene.remove(model); model=null; }
+      const url = URL.createObjectURL(file);
+      loader.load(url, addModel, undefined, err=>alert('Failed to load FBX: '+err.message));
+    };
+    renderer.domElement.addEventListener('dragover', e=>{ e.preventDefault(); });
+    renderer.domElement.addEventListener('drop', e=>{
+      e.preventDefault();
+      if(e.dataTransfer.files.length) loadFBX(e.dataTransfer.files[0]);
+    });
+
+    addEventListener('resize', ()=>{
+      renderer.setSize(innerWidth, innerHeight);
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    let dragging = false;
+    renderer.domElement.addEventListener('pointerdown', ()=>dragging=true);
+    renderer.domElement.addEventListener('pointerup',   ()=>dragging=false);
+
+    const softenAngle = (value, base, maxDelta)=>{
+      const delta = value - base;
+      const absD  = Math.abs(delta);
+      if(absD <= maxDelta) return value;
+      const excess = absD - maxDelta;
+      const eased = maxDelta + Math.tanh(excess*4)*0.1;
+      return base + Math.sign(delta)*eased;
+    };
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(()=>{
+      const t = clock.getElapsedTime();
+      if(model) model.position.y = Math.sin(t*0.8)*levAmp;
+
+      controls.update();
+      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+      sph.theta = softenAngle(sph.theta, baseTheta, maxAzDelta);
+      sph.phi   = softenAngle(sph.phi,   basePhi,   maxPolDelta);
+
+      if(!dragging){
+        sph.theta = THREE.MathUtils.lerp(sph.theta, baseTheta, 0.02);
+        sph.phi   = THREE.MathUtils.lerp(sph.phi,   basePhi,   0.02);
+      }
+
+      const offset = new THREE.Vector3().setFromSpherical(sph);
+      camera.position.copy(controls.target).add(offset);
+      camera.lookAt(controls.target);
+
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>
