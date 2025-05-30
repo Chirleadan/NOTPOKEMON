@@ -9,11 +9,22 @@
     canvas{display:block}
 
     /* overlay title */
-    #overlay{position:fixed;top:20px;left:50%;transform:translateX(-50%);font-size:clamp(24px,4vw,48px);letter-spacing:2px;font-weight:600;text-shadow:0 2px 4px rgba(0,0,0,.6);pointer-events:none;user-select:none}
+    #overlay{
+      position:fixed;
+      bottom:20px;
+      left:50%;
+      transform:translateX(-50%);
+      font-size:clamp(22px,3.7vw,42px);
+      letter-spacing:2px;
+      font-weight:600;
+      text-shadow:0 3px 6px rgba(0,0,0,.6);
+      pointer-events:none;
+      user-select:none;
+    }
   </style>
 </head>
 <body>
-  <div id="overlay">Be quiet</div>
+  <div id="overlay">COME BACK SOON</div>
 
   <!-- ── three.js import‑map ───────────────────────────→ -->
   <script type="importmap">
@@ -30,18 +41,15 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { FBXLoader }   from 'three/addons/loaders/FBXLoader.js';
 
-    /* renderer */
     const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(Math.min(devicePixelRatio,2));
     document.body.appendChild(renderer.domElement);
 
-    /* scene & camera */
     const scene  = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(0,1.6,3);
 
-    /* controls */
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.12;
@@ -49,34 +57,19 @@
     controls.enablePan     = false;
     controls.enableZoom    = false;
 
-    /* lighting: night ambience + brighter blue moon */
-    scene.add(new THREE.AmbientLight(0x222233, 0.65));
-    const moon = new THREE.DirectionalLight(0x7cb8ff, 1.6);
+    scene.add(new THREE.AmbientLight(0x2b2b40, 0.8));
+    const moon = new THREE.DirectionalLight(0x9ecbff, 1.9);
     moon.position.set(2,10,5);
     scene.add(moon);
 
-    /* materials */
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color:0x000000,
-      metalness:0.08,   // subtle sheen — slightly shinier than before
-      roughness:0.6     // a little less matte
-    });
+    const bodyMat = new THREE.MeshStandardMaterial({ color:0x000000, metalness:0.08, roughness:0.6 });
+    const eyeMat  = new THREE.MeshStandardMaterial({ color:0xffffff, emissive:0xffffff, emissiveIntensity:5, roughness:0.2 });
 
-    const eyeMat  = new THREE.MeshStandardMaterial({
-      color:0xffffff,
-      emissive:0xffffff,
-      emissiveIntensity:5,
-      roughness:0.2,
-      metalness:0.0
-    });
-
-    /* helpers */
     const loader = new FBXLoader();
     let   model  = null;
-
     let baseTheta = 0, basePhi = 0;
-    const maxAzDelta  = 0.4;  // ≈±23°
-    const maxPolDelta = 0.25; // ≈±14°
+    const maxAzDelta  = 0.4;
+    const maxPolDelta = 0.25;
     let levAmp = 0.2;
 
     const centerAndScale = (obj)=>{
@@ -115,18 +108,26 @@
       levAmp = radius * 0.2;
     };
 
-    /* load default model automatically */
     const modelURL = new URL('./model.fbx', import.meta.url).href;
-    loader.load(modelURL, addModel, undefined, err=>console.error('Failed to load model:', err));
+    loader.load(modelURL, addModel, undefined, err=>console.error('Failed to load FBX:', err));
 
-    /* resize */
+    const loadFBX = (file)=>{
+      if(model){ scene.remove(model); model=null; }
+      const url = URL.createObjectURL(file);
+      loader.load(url, addModel, undefined, err=>alert('Failed to load FBX: '+err.message));
+    };
+    renderer.domElement.addEventListener('dragover', e=>{ e.preventDefault(); });
+    renderer.domElement.addEventListener('drop', e=>{
+      e.preventDefault();
+      if(e.dataTransfer.files.length) loadFBX(e.dataTransfer.files[0]);
+    });
+
     addEventListener('resize', ()=>{
       renderer.setSize(innerWidth, innerHeight);
       camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
     });
 
-    /* soft‑limit helpers */
     let dragging = false;
     renderer.domElement.addEventListener('pointerdown', ()=>dragging=true);
     renderer.domElement.addEventListener('pointerup',   ()=>dragging=false);
@@ -140,14 +141,12 @@
       return base + Math.sign(delta)*eased;
     };
 
-    /* animation loop */
     const clock = new THREE.Clock();
     renderer.setAnimationLoop(()=>{
       const t = clock.getElapsedTime();
       if(model) model.position.y = Math.sin(t*0.8)*levAmp;
 
       controls.update();
-
       const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
       sph.theta = softenAngle(sph.theta, baseTheta, maxAzDelta);
       sph.phi   = softenAngle(sph.phi,   basePhi,   maxPolDelta);
